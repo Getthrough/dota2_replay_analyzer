@@ -135,7 +135,7 @@ HERO_CN = {
     "Marci": "玛西",
     "Primal_Beast": "獸",
     "Muerta": "琼英碧灵",
-    "Largo": "凯",  # 新英雄凯
+    "Largo": "凯",
     "Kez": "凯",
     "Ringmaster": "百戏大王",
 }
@@ -188,15 +188,8 @@ def parse_dem_file(dem_file: str, steam_id: str = None) -> dict:
         return json.load(f)
 
 
-def generate_prompt(data: dict, target_steam_id: str = None) -> str:
+def generate_prompt(data: dict, target_steam_id: str = None, lanes: dict = None) -> str:
     """Generate tactical analysis prompt from parsed data."""
-    
-    # Identify target player
-    target_hero = None
-    target_team = None
-    
-    # For now, we don't have steam_id mapping in the JSON, so we'll use the first hero
-    # In production, you'd map playerId to steam_id via the protobuf player info
     
     radiant = []
     for h in data.get('radiant', []):
@@ -215,7 +208,6 @@ def generate_prompt(data: dict, target_steam_id: str = None) -> str:
             hero_cn = get_hero_cn(h['heroName'])
             items = h.get('items', [])
             if items:
-                # Filter out consumables and show key items
                 key_items = [i for i in items if i not in ['回城卷轴', '树之祭祀', '魔法芒果', '仙灵之火', '侦查守卫', '岗哨守卫', '诡计之雾', '显影之尘']]
                 items_str = ", ".join(key_items[:8]) if key_items else ", ".join(items[:5])
                 items_info.append(f"{team_name} {hero_cn}: {items_str}")
@@ -228,6 +220,19 @@ def generate_prompt(data: dict, target_steam_id: str = None) -> str:
     
     deaths_str = "\n".join([f"- {hero}: {count} 次" for hero, count in sorted(death_summary.items(), key=lambda x: -x[1])[:10]])
     
+    # Lane matchup section
+    lane_section = ""
+    if lanes:
+        lane_parts = []
+        if 'top' in lanes:
+            lane_parts.append(f"- 上路: {lanes['top']}")
+        if 'mid' in lanes:
+            lane_parts.append(f"- 中路: {lanes['mid']}")
+        if 'bot' in lanes:
+            lane_parts.append(f"- 下路: {lanes['bot']}")
+        if lane_parts:
+            lane_section = "\n## 对线信息（用户提供）\n" + "\n".join(lane_parts)
+    
     prompt = f"""# Dota2 战术复盘分析
 
 ## 比赛概况
@@ -239,6 +244,7 @@ def generate_prompt(data: dict, target_steam_id: str = None) -> str:
 
 ### 夜魇 (Dire)
 {chr(10).join(dire)}
+{lane_section}
 
 ## 装备情况
 {chr(10).join(items_info)}
@@ -261,7 +267,6 @@ def generate_prompt(data: dict, target_steam_id: str = None) -> str:
 
 def analyze_with_llm(prompt: str) -> str:
     """Call LLM for tactical analysis."""
-    # Try to use claude -p if available
     try:
         result = subprocess.run(
             ["claude", "-p", prompt],
@@ -276,8 +281,30 @@ def analyze_with_llm(prompt: str) -> str:
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         print(f"claude -p not available: {e}", file=sys.stderr)
     
-    # Fallback: save prompt and instruct user
     return None
+
+
+def prompt_for_lanes():
+    """Interactive prompt for lane matchups when not provided via CLI."""
+    print("\n=== 请输入各条线对线英雄信息 ===")
+    print("格式: 英雄A vs 英雄B  (辅助用 + 连接)")
+    print("例如: 幻影长矛手 vs 虚空假面")
+    print("      复仇之魂+巫医 vs 斯温+暗影萨满")
+    print("直接回车表示跳过该线路\n")
+    
+    lanes = {}
+    lane_names = [
+        ("top", "上路 (Top/优势路)"),
+        ("mid", "中路 (Mid)"),
+        ("bot", "下路 (Bot/劣势路)")
+    ]
+    
+    for key, display in lane_names:
+        user_input = input(f"{display}: ").strip()
+        if user_input:
+            lanes[key] = user_input
+    
+    return lanes if lanes else {}
 
 
 def main():
@@ -285,17 +312,42 @@ def main():
     parser.add_argument('dem_file', help='Path to DEM file')
     parser.add_argument('--steam-id', help='Target Steam32 ID', default=None)
     parser.add_argument('--output', '-o', help='Output report file', default=None)
+    parser.add_argument('--lane-top', help='Top lane matchup, e.g. "CarryA vs OfflanerB"', default=None)
+    parser.add_argument('--lane-mid', help='Mid lane matchup, e.g. "HeroA vs HeroB"', default=None)
+    parser.add_argument('--lane-bot', help='Bot lane matchup, e.g. "CarryA+SupportB vs CarryC+SupportD"', default=None)
+    parser.add_argument('--lanes', help='JSON string with lane matchups, e.g. \'{"top":"A vs B","mid":"C vs D","bot":"E+F vs G+H"}\'', default=None)
     args = parser.parse_args()
     
     if not os.path.exists(args.dem_file):
         print(f"Error: DEM file not found: {args.dem_file}", file=sys.stderr)
         sys.exit(1)
     
+    # Collect lane info from CLI args
+    lanes = {}
+    if args.lane_top:
+        lanes['top'] = args.lane_top
+    if args.lane_mid:
+        lanes['mid'] = args.lane_mid
+    if args.lane_bot:
+        lanes['bot'] = args.lane_bot
+    
+    # If --lanes JSON provided, parse it (overrides individual args)
+    if args.lanes:
+        try:
+            lanes = json.loads(args.lanes)
+        except json.JSONDecodeError as e:
+            print(f"Error: Invalid --lanes JSON: {e}", file=sys.stderr)
+            sys.exit(1)
+    
+    # If no lane info provided at all, prompt interactively
+    if not lanes:
+        lanes = prompt_for_lanes()
+    
     print(f"Parsing DEM file: {args.dem_file}")
     data = parse_dem_file(args.dem_file, args.steam_id)
     
     print("Generating tactical analysis prompt...")
-    prompt = generate_prompt(data, args.steam_id)
+    prompt = generate_prompt(data, args.steam_id, lanes)
     
     # Save prompt to file for LLM analysis
     prompt_file = f"/tmp/dota2_prompt_{Path(args.dem_file).stem}.txt"
