@@ -17,7 +17,7 @@
 python3 analyze_dem.py <dem_file> [--steam-id <steam_id>] [-o <output.md>]
 
 # 示例
-python3 analyze_dem.py 8851540899.dem --steam-id 1187119470 -o report.md
+python3 analyze_dem.py 8851540899.dem --steam-id 123456789 -o report.md
 ```
 
 ## 项目结构
