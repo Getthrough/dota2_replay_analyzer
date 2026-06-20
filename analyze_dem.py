@@ -188,8 +188,69 @@ def parse_dem_file(dem_file: str, steam_id: str = None) -> dict:
         return json.load(f)
 
 
+def _override_lanes(data: dict, lanes: dict) -> dict:
+    """Override DEM-parsed lane assignments with user-provided lane info."""
+    if not lanes:
+        return data
+    
+    # Build reverse map: Chinese name -> English hero name
+    cn_to_en = {cn: en for en, cn in HERO_CN.items()}
+    
+    # Common aliases that users might type
+    ALIASES = {
+        '小狗': '噬魂鬼',
+        'NEC': '瘟疫法师',
+        '朗戈': '凯',
+        '风行': '风行者',
+        '宙斯': 'Zuus',
+        '炼金': '炼金术士',
+        '修补匠': 'Tinker',
+        '斧王': 'Axe',
+        '屠夫': 'Pudge',
+        '潮汐': '潮汐猎人',
+    }
+    
+    # Build a map of hero Chinese name -> lane from user input
+    hero_to_lane = {}
+    lane_map = {'top': '上路 (Top)', 'mid': '中路 (Mid)', 'bot': '下路 (Bot)'}
+    
+    for lane_key, lane_display in lane_map.items():
+        if lane_key not in lanes:
+            continue
+        matchup = lanes[lane_key]
+        # Split by "vs" to get both sides
+        parts = matchup.split(' vs ')
+        if len(parts) == 2:
+            for side in parts:
+                # Split by + for multiple heroes in same lane
+                heroes = [h.strip() for h in side.split('+')]
+                for hero_name in heroes:
+                    if not hero_name:
+                        continue
+                    # Resolve alias to canonical Chinese name
+                    canonical = ALIASES.get(hero_name, hero_name)
+                    hero_to_lane[canonical] = lane_display
+    
+    # Apply overrides to both radiant and dire
+    modified = data.copy()
+    for team_key in ['radiant', 'dire']:
+        team_heroes = []
+        for h in data.get(team_key, []):
+            hero_cn = get_hero_cn(h['heroName'])
+            h_copy = h.copy()
+            if hero_cn in hero_to_lane:
+                h_copy['lane'] = hero_to_lane[hero_cn]
+            team_heroes.append(h_copy)
+        modified[team_key] = team_heroes
+    
+    return modified
+
+
 def generate_prompt(data: dict, target_steam_id: str = None, lanes: dict = None) -> str:
     """Generate tactical analysis prompt from parsed data."""
+    
+    # Override DEM-parsed lanes with user-provided info
+    data = _override_lanes(data, lanes)
     
     radiant = []
     for h in data.get('radiant', []):
