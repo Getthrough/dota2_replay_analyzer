@@ -339,9 +339,19 @@ def main():
             print(f"Error: Invalid --lanes JSON: {e}", file=sys.stderr)
             sys.exit(1)
     
-    # If no lane info provided at all, prompt interactively
+    # If no lane info provided at all, prompt interactively or show error
     if not lanes:
-        lanes = prompt_for_lanes()
+        if sys.stdin.isatty():
+            lanes = prompt_for_lanes()
+        else:
+            print("\n错误: 未提供对线信息。", file=sys.stderr)
+            print("请使用以下方式之一提供对线信息:\n", file=sys.stderr)
+            print("  1. 命令行参数:", file=sys.stderr)
+            print('     --lane-top "英雄A vs 英雄B" --lane-mid "英雄C vs 英雄D" --lane-bot "英雄E+辅助 vs 英雄F+辅助"', file=sys.stderr)
+            print("  2. JSON 格式:", file=sys.stderr)
+            print('     --lanes \'{"top":"A vs B","mid":"C vs D","bot":"E+F vs G+H"}\'', file=sys.stderr)
+            print("  3. 在终端中直接运行，会提示交互式输入\n", file=sys.stderr)
+            sys.exit(1)
     
     print(f"Parsing DEM file: {args.dem_file}")
     data = parse_dem_file(args.dem_file, args.steam_id)
