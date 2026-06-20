@@ -196,17 +196,17 @@ def _override_lanes(data: dict, lanes: dict) -> dict:
     # Build reverse map: Chinese name -> English hero name
     cn_to_en = {cn: en for en, cn in HERO_CN.items()}
     
-    # Common aliases that users might type
+    # Common aliases that users might type -> canonical Chinese name
     ALIASES = {
         '小狗': '噬魂鬼',
         'NEC': '瘟疫法师',
         '朗戈': '凯',
         '风行': '风行者',
-        '宙斯': 'Zuus',
+        '宙斯': '宙斯',
         '炼金': '炼金术士',
-        '修补匠': 'Tinker',
-        '斧王': 'Axe',
-        '屠夫': 'Pudge',
+        '修补匠': '修补匠',
+        '斧王': '斧王',
+        '屠夫': '屠夫',
         '潮汐': '潮汐猎人',
     }
     
