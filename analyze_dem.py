@@ -458,13 +458,25 @@ def main():
     analysis = analyze_with_llm(prompt)
     
     if analysis:
+        # Determine output path
         if args.output:
-            with open(args.output, 'w') as f:
-                f.write(analysis)
-            print(f"Report saved to: {args.output}")
+            output_path = args.output
         else:
-            print("\n=== TACTICAL ANALYSIS ===\n")
-            print(analysis)
+            # Default: save to ~/.cache/dota2_analyzer/reports/<match_id>_<timestamp>.md
+            report_dir = Path.home() / ".cache" / "dota2_analyzer" / "reports"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            match_id = Path(args.dem_file).stem
+            output_path = str(report_dir / f"{match_id}_{timestamp}.md")
+        
+        with open(output_path, 'w') as f:
+            f.write(analysis)
+        print(f"Report saved to: {output_path}")
+        
+        # Also print to terminal
+        print("\n=== TACTICAL ANALYSIS ===\n")
+        print(analysis)
     else:
         print("\nLLM analysis not available. Prompt saved for manual analysis.")
         print(f"You can run: cat {prompt_file} | claude -p")
