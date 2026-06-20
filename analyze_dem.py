@@ -273,13 +273,40 @@ def generate_prompt(data: dict, target_steam_id: str = None, lanes: dict = None)
                 items_str = ", ".join(key_items[:8]) if key_items else ", ".join(items[:5])
                 items_info.append(f"{team_name} {hero_cn}: {items_str}")
     
-    # Death summary
+    # Death summary + detailed timeline per hero
     death_summary = {}
+    hero_deaths = {}  # hero_cn -> list of death details
     for d in data.get('deaths', []):
         hero = get_hero_cn(d['heroName'])
         death_summary[hero] = death_summary.get(hero, 0) + 1
+        
+        game_time = d.get('gameTimeMinutes', 0)
+        minutes = int(game_time)
+        seconds = int((game_time - minutes) * 60)
+        time_str = f"{minutes}:{seconds:02d}"
+        
+        location = d.get('location', '未知')
+        killer = d.get('killerName')
+        if killer:
+            killer_cn = get_hero_cn(killer)
+            detail = f"{time_str} 被{killer_cn}击杀于{location}"
+        else:
+            detail = f"{time_str} 死亡于{location}"
+        
+        if hero not in hero_deaths:
+            hero_deaths[hero] = []
+        hero_deaths[hero].append(detail)
     
-    deaths_str = "\n".join([f"- {hero}: {count} 次" for hero, count in sorted(death_summary.items(), key=lambda x: -x[1])[:10]])
+    # Build death stats string
+    deaths_str_lines = []
+    for hero, count in sorted(death_summary.items(), key=lambda x: -x[1]):
+        deaths_str_lines.append(f"- {hero}: {count} 次")
+        if hero in hero_deaths:
+            for detail in hero_deaths[hero][:5]:  # Show first 5 deaths
+                deaths_str_lines.append(f"    {detail}")
+            if len(hero_deaths[hero]) > 5:
+                deaths_str_lines.append(f"    ... 还有 {len(hero_deaths[hero]) - 5} 次死亡")
+    deaths_str = "\n".join(deaths_str_lines)
     
     # Lane matchup section
     lane_section = ""

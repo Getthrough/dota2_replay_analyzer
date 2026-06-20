@@ -176,6 +176,7 @@ public class DemParser {
         String heroName;
         int playerId;
         float[] position;
+        String killerName;  // May be null if not available
     }
     
     // JSON output classes
@@ -197,8 +198,11 @@ public class DemParser {
     
     static class DeathJson {
         int tick;
+        float gameTimeMinutes;  // Converted from tick
         String heroName;
+        String killerName;      // Who killed this hero (if available)
         float[] position;
+        String location;        // Lane/area description
     }
 
     public static void main(String[] args) throws Exception {
@@ -354,6 +358,41 @@ public class DemParser {
         }
     }
     
+    private float tickToGameTime(int tick) {
+        // Dota2 runs at 30 ticks per second, game time starts at 0
+        return tick / 30.0f / 60.0f;
+    }
+    
+    private String determineLocation(float[] position, int team) {
+        if (position == null || position.length < 2) return "未知";
+        float x = position[0];
+        float y = position[1];
+        
+        // Map boundaries (approximate)
+        // River is roughly in the middle
+        boolean isRadiantSide = (team == 2);
+        
+        // Check if in base
+        if (isRadiantSide && x < 4000 && y < 4000) return "天辉基地";
+        if (!isRadiantSide && x > 20000 && y > 20000) return "夜魇基地";
+        
+        // Check lanes by position
+        // Top lane: high Y for radiant, low Y for dire
+        // Bot lane: low Y for radiant, high Y for dire
+        // Mid: diagonal
+        
+        // Simplified: use the same logic as determineLane but with location names
+        if (isRadiantSide) {
+            if (y > 15000) return "上路";
+            if (y < 7000) return "下路";
+            return "中路/河道";
+        } else {
+            if (y < 7000) return "上路";
+            if (y > 15000) return "下路";
+            return "中路/河道";
+        }
+    }
+    
     private void writeJson(String outputPath, String targetSteamId) throws IOException {
         MatchData match = new MatchData();
         match.totalTicks = tickCount;
@@ -390,8 +429,12 @@ public class DemParser {
         for (DeathEvent death : deaths) {
             DeathJson dj = new DeathJson();
             dj.tick = death.tick;
+            dj.gameTimeMinutes = tickToGameTime(death.tick);
             dj.heroName = death.heroName;
+            dj.killerName = death.killerName;
             dj.position = death.position;
+            dj.location = determineLocation(death.position, 
+                heroes.get(death.playerId) != null ? heroes.get(death.playerId).team : 0);
             match.deaths.add(dj);
         }
         
