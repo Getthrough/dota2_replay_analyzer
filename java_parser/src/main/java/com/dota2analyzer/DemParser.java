@@ -6,6 +6,9 @@ import skadistats.clarity.processor.entities.Entities;
 import skadistats.clarity.processor.entities.UsesEntities;
 import skadistats.clarity.processor.entities.OnEntityCreated;
 import skadistats.clarity.processor.entities.OnEntityUpdated;
+import skadistats.clarity.processor.gameevents.OnCombatLogEntry;
+import skadistats.clarity.model.CombatLogEntry;
+import skadistats.clarity.wire.dota.common.proto.DOTACombatLog.DOTA_COMBATLOG_TYPES;
 import skadistats.clarity.processor.reader.OnTickEnd;
 import skadistats.clarity.processor.runner.Context;
 import skadistats.clarity.processor.runner.SimpleRunner;
@@ -169,6 +172,8 @@ public class DemParser {
         int lastHealth = -1;
         boolean isDead = false;
         int lastDeathTick = -1000;
+        float lastX = 0;
+        float lastY = 0;
     }
     
     static class DeathEvent {
@@ -177,6 +182,7 @@ public class DemParser {
         int playerId;
         float[] position;
         String killerName;  // May be null if not available
+        float gameTime;
     }
     
     // JSON output classes
@@ -201,7 +207,7 @@ public class DemParser {
         float gameTimeMinutes;  // Converted from tick
         String heroName;
         String killerName;      // Who killed this hero (if available)
-        float[] position;
+        List<Double> position;  // Use List instead of float[] for Gson serialization
         String location;        // Lane/area description
     }
 
@@ -302,33 +308,11 @@ public class DemParser {
                         float x = ((Number)cellX).floatValue() * 128.0f + ((Number)vecX).floatValue();
                         float y = ((Number)cellY).floatValue() * 128.0f + ((Number)vecY).floatValue();
                         hero.positions.add(new float[]{x, y, tickCount});
+                        hero.lastX = x;
+                        hero.lastY = y;
                     }
                 } catch (Exception e) {}
             }
-            
-            try {
-                Object health = entity.getProperty("m_iHealth");
-                if (health != null) {
-                    int currentHealth = ((Number) health).intValue();
-                    if (currentHealth == 0 && !hero.isDead && (tickCount - hero.lastDeathTick) > 100) {
-                        hero.isDead = true;
-                        hero.deathCount++;
-                        hero.lastDeathTick = tickCount;
-                        DeathEvent death = new DeathEvent();
-                        death.tick = tickCount;
-                        death.heroName = hero.heroName;
-                        death.playerId = playerId;
-                        if (!hero.positions.isEmpty()) {
-                            float[] lastPos = hero.positions.get(hero.positions.size() - 1);
-                            death.position = new float[]{lastPos[0], lastPos[1]};
-                        }
-                        deaths.add(death);
-                    } else if (currentHealth > 0) {
-                        hero.isDead = false;
-                    }
-                    hero.lastHealth = currentHealth;
-                }
-            } catch (Exception e) {}
             
             try {
                 Set<String> currentItemSet = new HashSet<>();
@@ -358,6 +342,67 @@ public class DemParser {
         }
     }
     
+    @OnCombatLogEntry
+    public void onCombatLogEntry(Context ctx, CombatLogEntry entry) {
+        if (entry.getType().toString().equals("DOTA_COMBATLOG_DEATH")) {
+            String targetName = entry.getTargetName();
+            String attackerName = entry.getAttackerName();
+            float timestamp = entry.getTimestamp();
+            
+            // Only track hero deaths (not creep deaths)
+            if (targetName == null || !targetName.startsWith("npc_dota_hero_")) {
+                return;
+            }
+            
+            // Convert "npc_dota_hero_windrunner" -> "Windrunner"
+            String heroName = targetName.replace("npc_dota_hero_", "");
+            heroName = capitalizeFirst(heroName);
+            
+            // Convert attacker name similarly
+            String killerName = null;
+            if (attackerName != null && attackerName.startsWith("npc_dota_hero_")) {
+                killerName = capitalizeFirst(attackerName.replace("npc_dota_hero_", ""));
+            } else if (attackerName != null) {
+                killerName = attackerName;
+            }
+            
+            // Find matching hero by name
+            HeroData matchedHero = null;
+            int matchedPlayerId = -1;
+            for (Map.Entry<Integer, HeroData> h : heroes.entrySet()) {
+                if (h.getValue().heroName.equalsIgnoreCase(heroName)) {
+                    matchedHero = h.getValue();
+                    matchedPlayerId = h.getKey();
+                    break;
+                }
+            }
+            
+            if (matchedHero != null) {
+                matchedHero.deathCount++;
+            }
+            
+            // Use hero's last known position from entity tracking (combatlog location is often 0)
+            float[] deathPos = new float[]{0.0f, 0.0f};
+            if (matchedHero != null && matchedHero.lastX != 0.0f && matchedHero.lastY != 0.0f) {
+                deathPos = new float[]{matchedHero.lastX, matchedHero.lastY};
+            }
+            
+            DeathEvent death = new DeathEvent();
+            death.tick = tickCount;
+            death.heroName = heroName;
+            death.playerId = matchedPlayerId;
+            death.position = deathPos;
+            death.killerName = killerName;
+            death.gameTime = timestamp;
+            deaths.add(death);
+        }
+    }
+    
+    private String capitalizeFirst(String s) {
+        if (s == null || s.isEmpty()) return s;
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+    
     private float tickToGameTime(int tick) {
         // Dota2 runs at 30 ticks per second, game time starts at 0
         return tick / 30.0f / 60.0f;
@@ -368,29 +413,26 @@ public class DemParser {
         float x = position[0];
         float y = position[1];
         
-        // Map boundaries (approximate)
-        // River is roughly in the middle
-        boolean isRadiantSide = (team == 2);
+        // Dota2 map coordinates:
+        // (0,0) = bottom-left (天辉基地)
+        // (25000, 25000) = top-right (夜魇基地)
+        // Top lane = high Y (toward top-right)
+        // Bot lane = low Y (toward bottom-left)
+        // Mid lane = diagonal
+        // Note: y > 15000 is actually 上路 (top), y < 7000 is 下路 (bottom)
+        // This is the same for both teams since it's absolute map position
         
         // Check if in base
-        if (isRadiantSide && x < 4000 && y < 4000) return "天辉基地";
-        if (!isRadiantSide && x > 20000 && y > 20000) return "夜魇基地";
+        if (x < 4000 && y < 4000) return "天辉基地";
+        if (x > 20000 && y > 20000) return "夜魇基地";
         
-        // Check lanes by position
-        // Top lane: high Y for radiant, low Y for dire
-        // Bot lane: low Y for radiant, high Y for dire
-        // Mid: diagonal
-        
-        // Simplified: use the same logic as determineLane but with location names
-        if (isRadiantSide) {
-            if (y > 15000) return "上路";
-            if (y < 7000) return "下路";
-            return "中路/河道";
-        } else {
-            if (y < 7000) return "上路";
-            if (y > 15000) return "下路";
-            return "中路/河道";
-        }
+        // Check lanes by absolute position (not team-relative)
+        // 上路 (Top): y > 15000 (upper part of map)
+        // 下路 (Bot): y < 7000 (lower part of map)
+        // 中路 (Mid): between 7000 and 15000
+        if (y > 15000) return "上路";
+        if (y < 7000) return "下路";
+        return "中路/河道";
     }
     
     private void writeJson(String outputPath, String targetSteamId) throws IOException {
@@ -429,10 +471,10 @@ public class DemParser {
         for (DeathEvent death : deaths) {
             DeathJson dj = new DeathJson();
             dj.tick = death.tick;
-            dj.gameTimeMinutes = tickToGameTime(death.tick);
+            dj.gameTimeMinutes = death.gameTime / 60.0f;
             dj.heroName = death.heroName;
             dj.killerName = death.killerName;
-            dj.position = death.position;
+            dj.position = Arrays.asList((double)death.position[0], (double)death.position[1]);
             dj.location = determineLocation(death.position, 
                 heroes.get(death.playerId) != null ? heroes.get(death.playerId).team : 0);
             match.deaths.add(dj);
@@ -481,7 +523,9 @@ public class DemParser {
         for (int i = 0; i < Math.min(30, deaths.size()); i++) {
             DeathEvent death = deaths.get(i);
             String posStr = death.position != null ? " pos=[" + String.format("%.1f", death.position[0]) + ", " + String.format("%.1f", death.position[1]) + "]" : "";
-            System.out.println("[tick:" + death.tick + "] " + death.heroName + " died" + posStr);
+            String killerStr = death.killerName != null ? " killed by " + death.killerName : "";
+            String timeStr = String.format("[%.1f min]", death.gameTime / 60.0f);
+            System.out.println(timeStr + " " + death.heroName + " died" + killerStr + posStr);
         }
         if (deaths.size() > 30) {
             System.out.println("... and " + (deaths.size() - 30) + " more deaths");

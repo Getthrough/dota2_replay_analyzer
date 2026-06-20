@@ -16,9 +16,7 @@
         <dependency>
             <groupId>com.skadistats</groupId>
             <artifactId>clarity-protobuf</artifactId>
-            <version>5.4</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/../clarity-src/build/libs/clarity-4.0.1.jar</systemPath>
+            <version>6.1</version>
         </dependency>
         <dependency>
             <groupId>com.google.code.gson</groupId>
