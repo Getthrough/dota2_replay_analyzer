@@ -153,13 +153,56 @@ public class DemParser {
         ITEM_CN.put("CDOTA_Item_Famango", "仙灵果");
         ITEM_CN.put("CDOTA_Item_Ward_Dispenser", "侦查·岗哨守卫");
         ITEM_CN.put("CDOTA_Item_Infused_Raindrop", "凝魂之露");
-        ITEM_CN.put("CDOTA_Item_Recipe_Bracer", "护腕卷轴");
+        ITEM_CN.put("CDOTA_Item_Recipe_MagicWand", "大魔棒卷轴");
         ITEM_CN.put("CDOTA_Item_EmptyBottle", "空瓶");
         ITEM_CN.put("CDOTA_Item_Dagon_Upgraded", "达贡之神力");
         ITEM_CN.put("CDOTA_Item_Spellslinger", "法术棱镜");
         ITEM_CN.put("CDOTA_Item_Enhancement_Keen_Eyed", "锐利之眼");
         ITEM_CN.put("CDOTA_Item_SerratedShiv", "锯齿短刀");
         ITEM_CN.put("CDOTA_Item_Enhancement_Brawny", "壮实身躯");
+        ITEM_CN.put("CDOTA_Item_Assault_Cuirass", "强袭胸甲");
+        ITEM_CN.put("CDOTA_Item_AssaultCuirass", "强袭胸甲");
+        ITEM_CN.put("CDOTA_Item_Enhancement_Crude", "粗糙强化");
+        ITEM_CN.put("CDOTA_Item_Spirit_Vessel", "魂之灵瓮");
+        ITEM_CN.put("CDOTA_Item_SpiritVessel", "魂之灵瓮");
+        ITEM_CN.put("CDOTA_Item_Shivas_Guard", "希瓦的守护");
+        ITEM_CN.put("CDOTA_Item_ShivasGuard", "希瓦的守护");
+        ITEM_CN.put("CDOTA_Item_Smoke_Of_Deceit", "诡计之雾");
+        ITEM_CN.put("CDOTA_Item_SmokeOfDeceit", "诡计之雾");
+        ITEM_CN.put("CDOTA_Item_Ward_Dispenser", "侦查·岗哨守卫");
+        ITEM_CN.put("CDOTA_Item_Enchanters_Bauble", "巫师坠饰");
+        ITEM_CN.put("CDOTA_Item_EnchantersBauble", "巫师坠饰");
+        ITEM_CN.put("CDOTA_Item_Octarine_Core", "玲珑心");
+        ITEM_CN.put("CDOTA_Item_OctarineCore", "玲珑心");
+        ITEM_CN.put("CDOTA_Item_Vladmir", "弗拉迪米尔的祭品");
+        ITEM_CN.put("CDOTA_Item_Arcane_Boots", "奥术鞋");
+        ITEM_CN.put("CDOTA_Item_ArcaneBoots", "奥术鞋");
+        ITEM_CN.put("CDOTA_Item_Dagon", "达贡之神力");
+        ITEM_CN.put("CDOTA_Item_Dagon_Upgraded", "达贡之神力");
+        ITEM_CN.put("CDOTA_Item_DagonUpgraded", "达贡之神力");
+        ITEM_CN.put("CDOTA_Item_Veil_Of_Discord", "纷争面纱");
+        ITEM_CN.put("CDOTA_Item_VeilOfDiscord", "纷争面纱");
+        ITEM_CN.put("CDOTA_Item_Yasha_And_Kaya", "慧夜对剑");
+        ITEM_CN.put("CDOTA_Item_YashaAndKaya", "慧夜对剑");
+        ITEM_CN.put("CDOTA_Item_Kaya_And_Sange", "散慧对剑");
+        ITEM_CN.put("CDOTA_Item_KayaAndSange", "散慧对剑");
+        ITEM_CN.put("CDOTA_Item_Blink_Dagger", "闪烁匕首");
+        ITEM_CN.put("CDOTA_Item_Blade_Mail", "刃甲");
+        ITEM_CN.put("CDOTA_Item_Black_King_Bar", "黑皇杖");
+        ITEM_CN.put("CDOTA_Item_Poor_Mans_Shield", "穷鬼盾");
+        ITEM_CN.put("CDOTA_Item_PoorMansShield", "穷鬼盾");
+        ITEM_CN.put("CDOTA_Item_Boots_Of_Bearing", "动力鞋");
+        ITEM_CN.put("CDOTA_Item_Lotus_Orb", "清莲宝珠");
+        ITEM_CN.put("CDOTA_Item_Jidi_Pollen_Bag", "吉迪花粉袋");
+        ITEM_CN.put("CDOTA_Item_Cloak_Of_Flames", "火焰斗篷");
+        ITEM_CN.put("CDOTA_Item_Conjurers_Catalyst", "召唤者触媒");
+        ITEM_CN.put("CDOTA_Item_Consecrated_Wraps", "神圣裹布");
+        ITEM_CN.put("CDOTA_Item_Dormant_Curio", "休眠奇物");
+        ITEM_CN.put("CDOTA_Item_Enhancement_Quickened", "迅捷强化");
+        ITEM_CN.put("CDOTA_Item_Enhancement_Timelss", "永恒强化");
+        ITEM_CN.put("CDOTA_Item_Enhancement_Mystical", "神秘强化");
+        ITEM_CN.put("CDOTA_Item_Enhancement_Greedy", "贪婪强化");
+        ITEM_CN.put("CDOTA_Item_Boots_Of_Bearing", "动力鞋");
     }
     
     static class HeroData {
@@ -202,6 +245,7 @@ public class DemParser {
         String lane;
         int deaths;
         List<String> items = new ArrayList<>();
+        List<String> itemEvents = new ArrayList<>();
     }
     
     static class DeathJson {
@@ -479,6 +523,8 @@ public class DemParser {
                 String lastEvent = hero.itemEvents.get(hero.itemEvents.size() - 1);
                 String itemsStr = lastEvent.substring(lastEvent.indexOf("]") + 2);
                 hj.items = Arrays.asList(itemsStr.split(", "));
+                // Add all item events for timeline analysis
+                hj.itemEvents = new ArrayList<>(hero.itemEvents);
             }
             
             if (hero.team == 2) match.radiant.add(hj);

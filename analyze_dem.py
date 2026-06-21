@@ -31,7 +31,9 @@ HERO_CN = {
     "Tiny": "小小",
     "Vengeful_Spirit": "复仇之魂",
     "Windrunner": "风行者",
-    "Zeus": "宙斯",
+    "Zuus": "宙斯",
+    "ZUUS": "宙斯",
+    "zuus": "宙斯",
     "Kunkka": "昆卡",
     "Lina": "莉娜",
     "Lion": "莱恩",
@@ -64,6 +66,7 @@ HERO_CN = {
     "Natures_Prophet": "先知",
     "Lifestealer": "噬魂鬼",
     "Life_Stealer": "噬魂鬼",
+    "Life_stealer": "噬魂鬼",
     "Dark_Seer": "黑暗贤者",
     "Clinkz": "克林克兹",
     "Omniknight": "全能骑士",
@@ -246,6 +249,88 @@ def _override_lanes(data: dict, lanes: dict) -> dict:
     return modified
 
 
+def _format_game_time(game_time_minutes: float) -> str:
+    """Format game time as MM:SS."""
+    total_seconds = int(game_time_minutes * 60)
+    minutes = total_seconds // 60
+    seconds = total_seconds % 60
+    return f"{minutes}:{seconds:02d}"
+
+
+def _parse_item_event(item_event_str: str) -> tuple:
+    """Parse item event string like '[tick:1234] 物品A, 物品B' -> (tick, [items])."""
+    # Extract tick number
+    tick_start = item_event_str.find('[tick:') + 6
+    tick_end = item_event_str.find(']', tick_start)
+    tick = int(item_event_str[tick_start:tick_end])
+    
+    # Extract items
+    items_str = item_event_str[tick_end + 2:]  # Skip "] "
+    items = [i.strip() for i in items_str.split(',') if i.strip()]
+    
+    return tick, items
+
+
+def _get_starting_items(hero_data: dict) -> list:
+    """Get starting items from the first item event (earliest tick)."""
+    item_events = hero_data.get('itemEvents', [])
+    if not item_events:
+        return []
+    
+    # Find the earliest tick event
+    earliest_tick = float('inf')
+    earliest_items = []
+    for event in item_events:
+        try:
+            tick, items = _parse_item_event(event)
+            if tick < earliest_tick:
+                earliest_tick = tick
+                earliest_items = items
+        except:
+            continue
+    
+    return earliest_items
+
+
+def _get_item_timeline(hero_data: dict, max_items: int = 10) -> list:
+    """Get item purchase timeline with game time, filtering duplicates and consumables."""
+    item_events = hero_data.get('itemEvents', [])
+    if not item_events:
+        return []
+    
+    # Consumables to filter out for cleaner timeline
+    CONSUMABLES = {'回城卷轴', '树之祭祀', '魔法芒果', '仙灵之火', '侦查守卫', '岗哨守卫', '诡计之雾', '显影之尘', '侦查·岗哨守卫'}
+    
+    timeline = []
+    seen_item_sets = set()  # Track unique item combinations to avoid duplicates
+    
+    for event in item_events:
+        try:
+            tick, items = _parse_item_event(event)
+            game_time_minutes = tick / 1800.0  # 30 ticks/sec * 60 sec
+            time_str = _format_game_time(game_time_minutes)
+            
+            # Filter out consumables
+            key_items = [i for i in items if i not in CONSUMABLES]
+            if not key_items:
+                continue
+            
+            # Create a signature for deduplication
+            item_signature = tuple(sorted(key_items))
+            if item_signature in seen_item_sets:
+                continue
+            seen_item_sets.add(item_signature)
+            
+            timeline.append(f"{time_str} {', '.join(key_items)}")
+            
+            if len(timeline) >= max_items:
+                break
+        except:
+            continue
+    
+    return timeline
+
+
 def generate_prompt(data: dict, target_steam_id: str = None, lanes: dict = None) -> str:
     """Generate tactical analysis prompt from parsed data."""
     
@@ -272,6 +357,18 @@ def generate_prompt(data: dict, target_steam_id: str = None, lanes: dict = None)
                 key_items = [i for i in items if i not in ['回城卷轴', '树之祭祀', '魔法芒果', '仙灵之火', '侦查守卫', '岗哨守卫', '诡计之雾', '显影之尘']]
                 items_str = ", ".join(key_items[:8]) if key_items else ", ".join(items[:5])
                 items_info.append(f"{team_name} {hero_cn}: {items_str}")
+    
+    # Get starting items for all heroes
+    starting_items_info = []
+    for team_name, team_data in [("天辉", data.get('radiant', [])), ("夜魇", data.get('dire', []))]:
+        for h in team_data:
+            hero_cn = get_hero_cn(h['heroName'])
+            starting = _get_starting_items(h)
+            if starting:
+                starting_items_info.append(f"{team_name} {hero_cn}: {', '.join(starting)}")
+    
+    # Get item timeline for target hero (will be filled after target_hero is identified)
+    item_timeline_info = []
     
     # Find target hero by steam ID
     # First, build death summary for all heroes
@@ -304,6 +401,16 @@ def generate_prompt(data: dict, target_steam_id: str = None, lanes: dict = None)
         # No steam ID provided, use death count heuristic
         target_hero = max(death_summary.keys(), key=lambda x: death_summary[x]) if death_summary else None
     
+    # Get item timeline for target hero
+    if target_hero:
+        for team_name, team_data in [("天辉", data.get('radiant', [])), ("夜魇", data.get('dire', []))]:
+            for h in team_data:
+                if get_hero_cn(h['heroName']) == target_hero:
+                    timeline = _get_item_timeline(h, max_items=10)
+                    if timeline:
+                        item_timeline_info = timeline
+                    break
+    
     # Detailed death timeline ONLY for target hero
     hero_deaths = {}  # hero_cn -> list of death details
     for d in data.get('deaths', []):
@@ -312,9 +419,7 @@ def generate_prompt(data: dict, target_steam_id: str = None, lanes: dict = None)
             continue  # Skip non-target hero deaths
         
         game_time = d.get('gameTimeMinutes', 0)
-        minutes = int(game_time)
-        seconds = int((game_time - minutes) * 60)
-        time_str = f"{minutes}:{seconds:02d}"
+        time_str = _format_game_time(game_time)
         
         location = d.get('location', '未知')
         killer = d.get('killerName')
@@ -328,10 +433,12 @@ def generate_prompt(data: dict, target_steam_id: str = None, lanes: dict = None)
             hero_deaths[hero] = []
         hero_deaths[hero].append(detail)
     
-    # Build death stats string: brief summary for all, detailed for target
+    # Build death stats string: brief summary for all (filter out 0 deaths), detailed for target
     deaths_str_lines = []
-    # Brief summary for all heroes
+    # Brief summary for all heroes (only show heroes with > 0 deaths)
     for hero, count in sorted(death_summary.items(), key=lambda x: -x[1]):
+        if count == 0:
+            continue  # Skip heroes with 0 deaths
         marker = " 👤" if hero == target_hero else ""
         deaths_str_lines.append(f"- {hero}: {count} 次{marker}")
     
@@ -358,10 +465,31 @@ def generate_prompt(data: dict, target_steam_id: str = None, lanes: dict = None)
         if lane_parts:
             lane_section = "\n## 对线信息（用户提供）\n" + "\n".join(lane_parts)
     
+    # Determine user's team for context
+    user_team = None
+    for team_name, team_data in [("天辉", data.get('radiant', [])), ("夜魇", data.get('dire', []))]:
+        for h in team_data:
+            if get_hero_cn(h['heroName']) == target_hero:
+                user_team = team_name
+                break
+        if user_team:
+            break
+
+    # Build item timeline section for target hero
+    item_timeline_section = ""
+    if item_timeline_info:
+        item_timeline_section = f"\n### {target_hero} 装备时间线（前10件关键装备）\n" + "\n".join([f"- {line}" for line in item_timeline_info])
+
+    # Build starting items section
+    starting_items_section = ""
+    if starting_items_info:
+        starting_items_section = "\n### 出门装\n" + "\n".join([f"- {line}" for line in starting_items_info])
+
     prompt = f"""# Dota2 战术复盘分析
 
 ## 比赛概况
 - 总时长: ~{data['totalTicks'] // 1800} 分钟 ({data['totalTicks']} ticks, 约 {data['totalTicks'] / 1800:.1f} 分钟)
+- 用户操作英雄: {target_hero}（{user_team}）
 
 ## 阵容
 ### 天辉 (Radiant)
@@ -372,18 +500,24 @@ def generate_prompt(data: dict, target_steam_id: str = None, lanes: dict = None)
 {lane_section}
 
 ## 装备情况
+### 最终装备
 {chr(10).join(items_info)}
+{starting_items_section}
+{item_timeline_section}
 
 ## 死亡统计
 {deaths_str}
 
 ## 分析要求
 请基于以上数据提供战术复盘分析，包括：
-1. **对线分析**: 各 lane 的对位关系，哪方优势
-2. **装备路线**: 关键英雄的装备选择是否合理
-3. **死亡分析**: 哪些英雄死亡过多，可能的原因
-4. **团队配合**: 基于阵容的团战策略建议
-5. **改进建议**: 针对劣势方的具体改进建议
+1. **对线分析**: 各 lane 的对位关系，哪方优势；重点分析用户操作的 {target_hero} 在对线期应该如何应对（走位、补刀、技能使用、换血时机等）
+2. **装备路线**: 重点分析 {target_hero} 在各阶段（对线期/中期/后期）应该出什么装备，当前装备选择是否合理，推荐的核心装备顺序。参考装备时间线判断出装节奏是否合适
+3. **出门装分析**: 评价 {target_hero} 的出门装选择是否合理，针对不同对线组合应该如何调整出门装
+4. **死亡分析**: 分析 {target_hero} 每次死亡的原因（走位失误、视野缺失、被gank、团战站位等），以及如何避免类似死亡
+5. **团队配合**: 基于阵容的团战策略建议，{target_hero} 在团战中的定位和作用
+6. **改进建议**: 针对 {user_team} 方（用户所在队伍）的具体改进建议，包括：
+   - 整体队伍的战术调整（分路、节奏、目标选择）
+   - {target_hero} 的个人发挥改进（操作细节、意识提升、决策优化）
 
 请用中文回答，装备名称使用中文。"""
     
@@ -440,14 +574,84 @@ def prompt_for_lanes():
 
 def main():
     parser = argparse.ArgumentParser(description='Dota2 DEM Analyzer')
-    parser.add_argument('dem_file', help='Path to DEM file')
+    parser.add_argument('dem_file', nargs='?', help='Path to DEM file')
     parser.add_argument('--steam-id', help='Target Steam32 ID', default=None)
     parser.add_argument('--output', '-o', help='Output report file', default=None)
     parser.add_argument('--lane-top', help='Top lane matchup, e.g. "CarryA vs OfflanerB"', default=None)
     parser.add_argument('--lane-mid', help='Mid lane matchup, e.g. "HeroA vs HeroB"', default=None)
     parser.add_argument('--lane-bot', help='Bot lane matchup, e.g. "CarryA+SupportB vs CarryC+SupportD"', default=None)
     parser.add_argument('--lanes', help='JSON string with lane matchups, e.g. \'{"top":"A vs B","mid":"C vs D","bot":"E+F vs G+H"}\'', default=None)
+    # Debug modes: independent of LLM
+    parser.add_argument('--debug-prompt', action='store_true', help='Only generate and print prompt, skip LLM')
+    parser.add_argument('--debug-java', action='store_true', help='Only run Java parser and print raw JSON, skip prompt generation')
     args = parser.parse_args()
+    
+    # Handle debug-java mode: just parse DEM and print raw JSON
+    if args.debug_java:
+        if not args.dem_file:
+            print("Error: --debug-java requires a DEM file", file=sys.stderr)
+            sys.exit(1)
+        if not os.path.exists(args.dem_file):
+            print(f"Error: DEM file not found: {args.dem_file}", file=sys.stderr)
+            sys.exit(1)
+        print(f"=== Java Parser Debug Mode ===")
+        print(f"Parsing DEM file: {args.dem_file}")
+        data = parse_dem_file(args.dem_file, args.steam_id)
+        # Pretty print raw JSON
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+    
+    # Handle debug-prompt mode: parse DEM, generate prompt, print and save, skip LLM
+    if args.debug_prompt:
+        if not args.dem_file:
+            print("Error: --debug-prompt requires a DEM file", file=sys.stderr)
+            sys.exit(1)
+        if not os.path.exists(args.dem_file):
+            print(f"Error: DEM file not found: {args.dem_file}", file=sys.stderr)
+            sys.exit(1)
+        
+        # Collect lane info from CLI args
+        lanes = {}
+        if args.lane_top:
+            lanes['top'] = args.lane_top
+        if args.lane_mid:
+            lanes['mid'] = args.lane_mid
+        if args.lane_bot:
+            lanes['bot'] = args.lane_bot
+        if args.lanes:
+            try:
+                lanes = json.loads(args.lanes)
+            except json.JSONDecodeError as e:
+                print(f"Error: Invalid --lanes JSON: {e}", file=sys.stderr)
+                sys.exit(1)
+        
+        if not lanes:
+            print("Warning: No lane info provided. Prompt will use DEM-parsed lanes only.", file=sys.stderr)
+        
+        print(f"=== Prompt Debug Mode ===")
+        print(f"Parsing DEM file: {args.dem_file}")
+        data = parse_dem_file(args.dem_file, args.steam_id)
+        
+        print("Generating prompt...")
+        prompt = generate_prompt(data, args.steam_id, lanes)
+        
+        # Save prompt to file
+        prompt_file = f"/tmp/dota2_prompt_{Path(args.dem_file).stem}.txt"
+        with open(prompt_file, 'w') as f:
+            f.write(prompt)
+        print(f"Prompt saved to: {prompt_file}")
+        
+        # Print prompt to stdout
+        print("\n=== GENERATED PROMPT ===\n")
+        print(prompt)
+        print(f"\n=== END OF PROMPT ===")
+        print(f"Prompt length: {len(prompt)} characters")
+        return
+    
+    # Normal mode: full analysis with LLM
+    if not args.dem_file:
+        parser.print_help()
+        sys.exit(1)
     
     if not os.path.exists(args.dem_file):
         print(f"Error: DEM file not found: {args.dem_file}", file=sys.stderr)
