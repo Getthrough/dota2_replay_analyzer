@@ -27,6 +27,7 @@ public class DemParser {
     private Map<Integer, HeroData> heroes = new HashMap<>();
     private Map<Integer, String> itemEntities = new HashMap<>();
     private List<DeathEvent> deaths = new ArrayList<>();
+    private Map<Integer, Long> playerIdToSteamId = new HashMap<>();
     
     private static final Map<String, String> ITEM_CN = new HashMap<>();
     static {
@@ -191,6 +192,7 @@ public class DemParser {
         List<HeroJson> radiant = new ArrayList<>();
         List<HeroJson> dire = new ArrayList<>();
         List<DeathJson> deaths = new ArrayList<>();
+        Map<String, String> steamIdToHero = new HashMap<>();  // steamId (string) -> heroName
     }
     
     static class HeroJson {
@@ -278,6 +280,21 @@ public class DemParser {
                     if (team != null) hero.team = ((Number) team).intValue();
                 } catch (Exception e) {}
             }
+        }
+        
+        // Capture Steam ID from player controller entities
+        if (name.equals("CDOTAPlayerController")) {
+            try {
+                Object steamId = entity.getProperty("m_steamID");
+                Object playerId = entity.getProperty("m_nPlayerID");
+                if (steamId != null && playerId != null) {
+                    long steam = ((Number) steamId).longValue();
+                    int pid = ((Number) playerId).intValue();
+                    if (steam != 0) {
+                        playerIdToSteamId.put(pid, steam);
+                    }
+                }
+            } catch (Exception e) {}
         }
     }
     
@@ -478,6 +495,16 @@ public class DemParser {
             dj.location = determineLocation(death.position, 
                 heroes.get(death.playerId) != null ? heroes.get(death.playerId).team : 0);
             match.deaths.add(dj);
+        }
+        
+        // Build steamId -> heroName mapping
+        for (Map.Entry<Integer, Long> entry : playerIdToSteamId.entrySet()) {
+            int pid = entry.getKey();
+            long steamId = entry.getValue();
+            HeroData hero = heroes.get(pid);
+            if (hero != null) {
+                match.steamIdToHero.put(String.valueOf(steamId), hero.heroName);
+            }
         }
         
         Gson gson = new GsonBuilder().setPrettyPrinting().create();

@@ -273,12 +273,43 @@ def generate_prompt(data: dict, target_steam_id: str = None, lanes: dict = None)
                 items_str = ", ".join(key_items[:8]) if key_items else ", ".join(items[:5])
                 items_info.append(f"{team_name} {hero_cn}: {items_str}")
     
-    # Death summary + detailed timeline per hero
+    # Find target hero by steam ID
+    # First, build death summary for all heroes
     death_summary = {}
-    hero_deaths = {}  # hero_cn -> list of death details
     for d in data.get('deaths', []):
         hero = get_hero_cn(d['heroName'])
         death_summary[hero] = death_summary.get(hero, 0) + 1
+    
+    target_hero = None
+    if target_steam_id:
+        # Convert 32-bit steam ID to 64-bit if needed
+        steam_id_str = str(target_steam_id)
+        if len(steam_id_str) < 15:
+            # 32-bit to 64-bit conversion
+            steam64 = str(76561197960265728 + int(target_steam_id))
+        else:
+            steam64 = steam_id_str
+        
+        # Look up in the mapping from Java parser (values are English hero names)
+        steam_to_hero = data.get('steamIdToHero', {})
+        target_hero_en = steam_to_hero.get(steam64)
+        if target_hero_en:
+            target_hero = get_hero_cn(target_hero_en)
+        
+        # Fallback: if not found, use death count heuristic
+        if not target_hero:
+            print(f"Warning: Steam ID {target_steam_id} not found in replay, using heuristic", file=sys.stderr)
+            target_hero = max(death_summary.keys(), key=lambda x: death_summary[x]) if death_summary else None
+    else:
+        # No steam ID provided, use death count heuristic
+        target_hero = max(death_summary.keys(), key=lambda x: death_summary[x]) if death_summary else None
+    
+    # Detailed death timeline ONLY for target hero
+    hero_deaths = {}  # hero_cn -> list of death details
+    for d in data.get('deaths', []):
+        hero = get_hero_cn(d['heroName'])
+        if hero != target_hero:
+            continue  # Skip non-target hero deaths
         
         game_time = d.get('gameTimeMinutes', 0)
         minutes = int(game_time)
@@ -297,15 +328,21 @@ def generate_prompt(data: dict, target_steam_id: str = None, lanes: dict = None)
             hero_deaths[hero] = []
         hero_deaths[hero].append(detail)
     
-    # Build death stats string
+    # Build death stats string: brief summary for all, detailed for target
     deaths_str_lines = []
+    # Brief summary for all heroes
     for hero, count in sorted(death_summary.items(), key=lambda x: -x[1]):
-        deaths_str_lines.append(f"- {hero}: {count} 次")
-        if hero in hero_deaths:
-            for detail in hero_deaths[hero][:5]:  # Show first 5 deaths
-                deaths_str_lines.append(f"    {detail}")
-            if len(hero_deaths[hero]) > 5:
-                deaths_str_lines.append(f"    ... 还有 {len(hero_deaths[hero]) - 5} 次死亡")
+        marker = " 👤" if hero == target_hero else ""
+        deaths_str_lines.append(f"- {hero}: {count} 次{marker}")
+    
+    # Detailed timeline for target hero only
+    if target_hero and target_hero in hero_deaths:
+        deaths_str_lines.append(f"\n## 死亡详情（{target_hero}）")
+        for detail in hero_deaths[target_hero][:10]:  # Show first 10 deaths
+            deaths_str_lines.append(f"    {detail}")
+        if len(hero_deaths[target_hero]) > 10:
+            deaths_str_lines.append(f"    ... 还有 {len(hero_deaths[target_hero]) - 10} 次死亡")
+    
     deaths_str = "\n".join(deaths_str_lines)
     
     # Lane matchup section
@@ -324,7 +361,7 @@ def generate_prompt(data: dict, target_steam_id: str = None, lanes: dict = None)
     prompt = f"""# Dota2 战术复盘分析
 
 ## 比赛概况
-- 总时长: {data['totalTicks']} ticks
+- 总时长: ~{data['totalTicks'] // 1800} 分钟 ({data['totalTicks']} ticks, 约 {data['totalTicks'] / 1800:.1f} 分钟)
 
 ## 阵容
 ### 天辉 (Radiant)
@@ -370,6 +407,12 @@ def analyze_with_llm(prompt: str) -> str:
         print(f"claude -p not available: {e}", file=sys.stderr)
     
     return None
+
+
+def generate_prompt_only(data: dict, steam_id: str = None, lanes: dict = None) -> str:
+    """Generate prompt from parsed data without calling LLM. For debugging/verification."""
+    prompt = generate_prompt(data, steam_id, lanes)
+    return prompt
 
 
 def prompt_for_lanes():
